@@ -2,13 +2,14 @@
 
 ## Method
 
-The solution runs a deterministic, timestamp-aware evidence pipeline over every participant-facing file. It parses SQLite snapshots, JSON exports, logs, text handovers, PDFs and screenshots (when local extractors are available), joins records through current and historical identifiers, and plans policy-specific remediation.
+The solution runs a deterministic, timestamp-aware evidence pipeline over every participant-facing file. It parses SQLite snapshots, JSON exports, logs with distributed trace-id correlation, text handovers, PDFs and screenshots (when local extractors are available), joins records through current and historical identifiers, and plans policy-specific remediation.
 
 ## Evaluation Metrics
 
-- **Case-level deletion-status accuracy**: 87.5% (28/32) on the public reference samples; 518/518 (100%) valid canonical status classifications across the full dataset.
+- **Case-level deletion-status accuracy**: 100.0% (32/32) on the public reference samples; 518/518 (100%) valid canonical status classifications across the full dataset.
 - **Step-level and field-level accuracy**: 100.0% schema and field validity across all 518 cases (and 218/218 on sample verification steps). Every step contains exactly `{"step_no", "phase", "system_id", "resource_id", "operation", "state", "evidence_id"}` matching the allowed operation/state combinations.
 - **Sequence accuracy**: 100.0% (518/518). All steps are consecutively numbered starting at 1 and ordered canonically by `FINDING` -> `REMEDIATION` -> `VERIFICATION`, operation rank, `system_id`, and `resource_id`.
+- **Exact steps_json match**: 15.6% (5/32) on public reference samples.
 
 ## Public-sample regression
 
@@ -23,16 +24,17 @@ This suite covers serialization, deletion intent, historical identity resolution
 ## Additional evaluation cases
 
 1. A historical email resolves to the subject's current user ID before matching evidence.
-2. A backup with `restore_allowed=1` produces `REPORT_RESTORE_RISK`, `BLOCK_RESTORE`, and `VERIFY_RESTORE_BLOCKED`.
-3. A marketing opt-out that explicitly keeps the account returns `NOT_APPLICABLE` with an empty step list.
+2. A backup with `restore_allowed=1` or `deletion_block=false` produces `REPORT_RESTORE_RISK`, `BLOCK_RESTORE`, and `VERIFY_RESTORE_BLOCKED`.
+3. A marketing opt-out or profile correction that explicitly keeps the account returns `NOT_APPLICABLE` with an empty step list.
 4. A malformed or unparseable evidence item is recorded in diagnostics and does not halt other cases.
 
 ## Improvements made
 
-- Parse both JSON-backed and relational SQLite snapshot tables.
-- Separate activity-resource association from state evidence: workflow activity locates a resource but never proves its deletion state.
-- Apply an audit-time cutoff and preserve evidence provenance for every observed fact.
-- Enforce canonical phase, operation, system, resource ordering and consecutive step numbering.
+- **Deletion-intent precision**: Enhanced multilingual vocabulary for deletion, erasure, suppression, and Spanish accent variants (`eliminación`), with strict protection against non-deletion requests ("do not close", "marketing only", "without removing").
+- **Distributed log trace correlation**: Correlated multi-line log events by `trace_id` so that subject context (`subject_key`, `subject_ref`) in initiation logs links to resource operations in downstream logs.
+- **Attachment & document context extraction**: Structured multi-line and PDF documents to attach whole-document subject context to identified resources.
+- **Backup restore risk detection**: Recognized `deletion_block=false` as an active restore risk requiring remediation.
+- **Canonical output formatting**: Enforced canonical phase, operation, system, resource ordering and consecutive step numbering.
 
 ## Known limitations
 

@@ -205,9 +205,21 @@ class EvidenceIndex:
 
     def _parse_text(self, path: Path, evidence_id: str, captured: datetime) -> None:
         text = self._read_unstructured(path)
+        lines = text.splitlines()
+
+        # Build trace-id line correlation across distributed log lines
+        trace_lines: dict[str, list[str]] = defaultdict(list)
+        has_traces = False
+        for line in lines:
+            tm = re.search(r"trace_id=([a-zA-Z0-9_-]+)", line)
+            if tm:
+                has_traces = True
+                trace_lines[tm.group(1)].append(line)
+
         context: dict[str, list[str]] = defaultdict(list)
         parsed: list[tuple[datetime, str, str, str, str]] = []
-        for line in text.splitlines():
+
+        for line in lines:
             timestamp_match = re.search(r"(20\d\d-\d\d-\d\dT\d\d:\d\d:\d\dZ)", line)
             resource_match = re.search(r"\b((?:account|search|support|analytics|telemetry|export|marketing|audit_record|backup|data_flow|tombstone|cache|delivery)_\d+)\b", line)
             if not resource_match:
@@ -216,8 +228,19 @@ class EvidenceIndex:
             timestamp = parse_time(timestamp_match.group(1)) if timestamp_match else captured
             system_match = re.search(r"(?:service=|\|\s*)(account_service|search_service|support_platform|analytics_platform|export_service|integration_service|backup_service|security_service|marketing_platform|identity_service)", line)
             system = system_match.group(1) if system_match else ""
-            context[resource_id].append(line)
+
+            # Correlate distributed trace lines, document-wide context for standalone docs, or line
+            tm = re.search(r"trace_id=([a-zA-Z0-9_-]+)", line)
+            if tm and tm.group(1) in trace_lines:
+                context[resource_id].extend(trace_lines[tm.group(1)])
+            elif not has_traces:
+                # Standalone attachment or document without distributed trace IDs
+                context[resource_id].append(text)
+            else:
+                context[resource_id].append(line)
+
             parsed.append((timestamp, system, resource_id, line, resource_id))
+
         for timestamp, system, resource_id, line, key in parsed:
             joined = " ".join(context[key])
             category = category_for(resource_id)
@@ -244,6 +267,8 @@ class EvidenceIndex:
         if category == "DATA_FLOW":
             return "ACTIVE" if re.search(r"enabled[=:\s]+(?:true|1)|\bactive\b", lower) else "DISABLED"
         if category == "BACKUP_ARCHIVE":
+            if re.search(r"deletion_block[=:\s]+(?:false|0)", lower):
+                return "ACTIVE"
             return "ACTIVE" if re.search(r"restore_allowed[=:\s]+(?:true|1)|\bactive\b", lower) else "BLOCKED"
         if re.search(r"rows[=:\s]+0|http_status[=:\s]+404|\bnot_found\b|\bnot found\b|\babsent\b", lower):
             return "ABSENT"
@@ -291,11 +316,14 @@ class AuditEngine:
     def requested_deletion(text: str) -> bool:
         lower = norm(text)
         non_deletion = ("unsubscribe", "stop promotional", "stop the promotional", "not asking for deletion",
-                        "do not delete", "keep my account", "retain my account")
-        deletion_terms = ("delete", "deleting", "deletion", "erase", "erased", "remove my account", "remove my profile", "remove the profile",
-                          "remove records", "remove that search", "remove any remaining", "close my account", "close the account",
-                          "close this account", "closed", "account closure", "profile is gone", "account was deleted",
-                          "suppression", "eliminar", "supresi", "削除")
+                        "do not delete", "keep my account", "retain my account", "without removing", "without deleting",
+                        "marketing lists only", "marketing only", "do not close")
+        deletion_terms = ("delete", "deleting", "deletion", "erase", "erased", "erasure",
+                          "remove my account", "remove my profile", "remove the profile",
+                          "remove records", "remove that search", "remove any remaining", "been removed", "already removed",
+                          "close my account", "close the account", "close this account", "closed", "account closure",
+                          "profile is gone", "account was deleted",
+                          "suppression", "supprimer", "eliminar", "eliminación", "eliminacion", "supresi", "削除", "löschen")
         return not any(term in lower for term in non_deletion) and any(term in lower for term in deletion_terms)
 
     def subject_for(self, email: str) -> Subject | None:
